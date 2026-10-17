@@ -12,6 +12,9 @@ const schema = new mongoose.Schema({
   estado: { type: String, default: 'Activo' },
   esGranel: { type: Boolean, default: false },
   proveedorId: Number,
+  descripcion: { type: String, default: '' },
+  imagen: { type: String, default: '' },
+  destacado: { type: Boolean, default: false },
 });
 
 export const Producto = mongoose.model('Producto', schema);

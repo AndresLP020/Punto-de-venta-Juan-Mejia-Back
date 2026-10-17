@@ -38,7 +38,7 @@ router.get('/:id', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
-    const { nombre, codigo, categoria, precio, costo, stock, stockMinimo, estado, esGranel, proveedorId } = req.body;
+    const { nombre, codigo, categoria, precio, costo, stock, stockMinimo, estado, esGranel, proveedorId, descripcion, imagen, destacado } = req.body;
     const id = await getNextId(Producto);
     const nuevo = await Producto.create({
       id,
@@ -52,6 +52,9 @@ router.post('/', async (req, res) => {
       estado: estado || 'Activo',
       esGranel: Boolean(esGranel),
       proveedorId: proveedorId != null ? Number(proveedorId) : undefined,
+      descripcion: descripcion || '',
+      imagen: imagen || '',
+      destacado: Boolean(destacado),
     });
     res.status(201).json(nuevo.toObject());
   } catch (err) {
@@ -63,7 +66,7 @@ router.put('/:id', async (req, res) => {
   try {
     const doc = await Producto.findOne({ id: Number(req.params.id) });
     if (!doc) return res.status(404).json({ error: 'Producto no encontrado' });
-    const { nombre, codigo, categoria, precio, costo, stock, stockMinimo, estado, esGranel, proveedorId } = req.body;
+    const { nombre, codigo, categoria, precio, costo, stock, stockMinimo, estado, esGranel, proveedorId, descripcion, imagen, destacado } = req.body;
     if (nombre != null) doc.nombre = nombre;
     if (codigo != null) doc.codigo = codigo;
     if (categoria != null) doc.categoria = categoria;
@@ -74,6 +77,9 @@ router.put('/:id', async (req, res) => {
     if (estado != null) doc.estado = estado;
     if (esGranel != null) doc.esGranel = Boolean(esGranel);
     if (proveedorId !== undefined) doc.proveedorId = proveedorId != null ? Number(proveedorId) : null;
+    if (descripcion != null) doc.descripcion = descripcion;
+    if (imagen != null) doc.imagen = imagen;
+    if (destacado != null) doc.destacado = Boolean(destacado);
     await doc.save();
     res.json(doc.toObject());
   } catch (err) {

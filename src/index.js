@@ -18,14 +18,22 @@ import usuariosRouter from './routes/usuarios.js';
 import authRouter from './routes/auth.js';
 import cuentasProveedoresRouter from './routes/cuentasProveedores.js';
 import lienzoCharroRouter from './routes/lienzoCharro.js';
+import ofertasRouter from './routes/ofertas.js';
+import pedidosRouter from './routes/pedidos.js';
+import pagosRouter, { stripeWebhookHandler } from './routes/pagos.js';
 
-dotenv.config();
+dotenv.config(); // Carga .env (Stripe, WhatsApp, Mongo)
 
 const app = express();
 const PORT = process.env.PORT || 4000;
 
 app.use(cors({ origin: process.env.FRONT_URL || 'http://localhost:3000' }));
-app.use(express.json());
+
+// El webhook de Stripe necesita el cuerpo crudo para verificar la firma.
+// Debe registrarse ANTES de express.json().
+app.post('/api/pagos/stripe/webhook', express.raw({ type: 'application/json' }), stripeWebhookHandler);
+
+app.use(express.json({ limit: '12mb' }));
 
 app.get('/api/health', (_, res) => res.json({ ok: true, message: 'POS API' }));
 
@@ -44,6 +52,9 @@ app.use('/api/devoluciones', devolucionesRouter);
 app.use('/api/usuarios', usuariosRouter);
 app.use('/api/auth', authRouter);
 app.use('/api/lienzo-charro', lienzoCharroRouter);
+app.use('/api/ofertas', ofertasRouter);
+app.use('/api/pedidos', pedidosRouter);
+app.use('/api/pagos', pagosRouter);
 
 conectarMongo()
   .then(() => {

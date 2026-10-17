@@ -27,7 +27,38 @@ dotenv.config(); // Carga .env (Stripe, WhatsApp, Mongo)
 const app = express();
 const PORT = process.env.PORT || 4000;
 
-app.use(cors({ origin: process.env.FRONT_URL || 'http://localhost:3000' }));
+function normalizarOrigen(url) {
+  return String(url || '')
+    .trim()
+    .replace(/^['"]|['"]$/g, '')
+    .replace(/\/+$/, '');
+}
+
+const ORIGENES_PERMITIDOS = (process.env.FRONT_URL || 'http://localhost:3000')
+  .split(',')
+  .map(normalizarOrigen)
+  .filter(Boolean);
+
+function origenPermitido(origin) {
+  const pedido = normalizarOrigen(origin);
+  if (!pedido) return true;
+  if (ORIGENES_PERMITIDOS.includes(pedido)) return true;
+  if (/^https:\/\/punto-de-venta-juan-mejia-front[\w-]*\.vercel\.app$/i.test(pedido)) return true;
+  if (/^http:\/\/localhost(:\d+)?$/i.test(pedido)) return true;
+  return false;
+}
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (origenPermitido(origin)) return callback(null, true);
+      callback(null, false);
+    },
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    optionsSuccessStatus: 204,
+  })
+);
 
 // El webhook de Stripe necesita el cuerpo crudo para verificar la firma.
 // Debe registrarse ANTES de express.json().

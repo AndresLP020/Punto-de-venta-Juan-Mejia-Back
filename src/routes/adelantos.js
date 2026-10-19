@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { getNextId } from '../db.js';
 import { Adelanto } from '../models/Adelanto.js';
 import { Empleado } from '../models/Empleado.js';
+import { GastoAdmin } from '../models/GastoAdmin.js';
 
 const router = Router();
 
@@ -48,6 +49,15 @@ router.post('/', async (req, res) => {
       saldoPendiente: monto,
       fecha: new Date().toISOString(),
       estado: 'activo',
+    });
+    // El adelanto es dinero que sale hoy: se registra como gasto (Sueldos)
+    const gastoId = await getNextId(GastoAdmin);
+    await GastoAdmin.create({
+      id: gastoId,
+      fecha: adelanto.fecha,
+      descripcion: `Adelanto de sueldo (${empleado.nombre})`,
+      categoria: 'Sueldos',
+      monto,
     });
     res.status(201).json(adelanto.toObject());
   } catch (err) {

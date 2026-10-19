@@ -2,10 +2,12 @@ import { Router } from 'express';
 import { getNextId } from '../db.js';
 import { Venta } from '../models/Venta.js';
 import { Producto } from '../models/Producto.js';
+import { requiereAdmin, requierePermiso, requiereSesion } from '../seguridad.js';
 
 const router = Router();
+const redondear2 = (n) => Math.round(Number(n) * 100) / 100;
 
-router.get('/', async (req, res) => {
+router.get('/', requiereSesion, async (req, res) => {
   try {
     const ventas = await Venta.find().sort({ id: -1 }).lean();
     res.json(ventas);
@@ -14,37 +16,60 @@ router.get('/', async (req, res) => {
   }
 });
 
-router.post('/', async (req, res) => {
+router.post('/', requierePermiso('hacerVentas'), async (req, res) => {
   try {
-    const { items, total, cliente, clienteId, pagado } = req.body;
-    const totalVenta = Number(total) || 0;
-    const pagadoVenta = Number(pagado) ?? totalVenta;
-    const itemsConCosto = (items || []).map((it) => ({
-      id: it.id,
-      nombre: it.nombre,
-      precio: Number(it.precio) || 0,
-      cantidad: Number(it.cantidad) || 0,
-      costo: it.costo != null ? Number(it.costo) : 0,
-    }));
+    const { items, cliente, clienteId, pagado } = req.body || {};
+    const itemsConCosto = (Array.isArray(items) ? items : [])
+      .map((it) => ({
+        id: Number(it.id),
+        nombre: String(it.nombre || 'Producto'),
+        precio: redondear2(it.precio) || 0,
+        cantidad: Number(it.cantidad) || 0,
+        costo: it.costo != null ? Number(it.costo) : 0,
+      }))
+      .filter((it) => it.cantidad > 0);
+    if (itemsConCosto.length === 0) return res.status(400).json({ error: 'La venta no tiene productos' });
+    if (itemsConCosto.some((it) => it.precio < 0)) return res.status(400).json({ error: 'Hay precios inválidos' });
+
+    // El total se calcula en el servidor a partir de los productos
+    const totalVenta = redondear2(itemsConCosto.reduce((s, it) => s + it.precio * it.cantidad, 0));
+    const pagadoNum = pagado === undefined || pagado === null || pagado === '' ? totalVenta : Number(pagado);
+    if (!Number.isFinite(pagadoNum) || pagadoNum < 0) return res.status(400).json({ error: 'El monto pagado no es válido' });
+    const pagadoVenta = redondear2(pagadoNum);
+
+    // Descontar stock solo si alcanza (operación atómica por producto); si uno falla se revierte todo
+    const descontados = [];
+    for (const it of itemsConCosto) {
+      const prod = await Producto.findOneAndUpdate(
+        { id: it.id, stock: { $gte: it.cantidad } },
+        { $inc: { stock: -it.cantidad } },
+        { new: true }
+      );
+      if (!prod) {
+        for (const d of descontados) await Producto.updateOne({ id: d.id }, { $inc: { stock: d.cantidad } });
+        const actual = await Producto.findOne({ id: it.id }).lean();
+        return res.status(400).json({
+          error: actual
+            ? `No hay stock suficiente para "${it.nombre}". Disponible: ${actual.stock ?? 0}, solicitado: ${it.cantidad}`
+            : `El producto "${it.nombre}" ya no existe`,
+        });
+      }
+      descontados.push(it);
+    }
+
     const id = await getNextId(Venta);
+    const pendiente = Math.max(0, redondear2(totalVenta - pagadoVenta));
     const venta = await Venta.create({
       id,
       fecha: new Date().toISOString(),
       items: itemsConCosto,
       total: totalVenta,
       pagado: pagadoVenta,
-      pendiente: totalVenta - pagadoVenta,
+      pendiente,
       cliente: cliente || '',
       clienteId: clienteId ? Number(clienteId) : null,
-      estado: pagadoVenta >= totalVenta ? 'pagado' : 'pendiente',
+      estado: pendiente <= 0 ? 'pagado' : 'pendiente',
     });
-    // Descontar stock de cada producto en la base de datos
-    for (const it of itemsConCosto) {
-      await Producto.findOneAndUpdate(
-        { id: it.id },
-        { $inc: { stock: -it.cantidad } }
-      );
-    }
     res.status(201).json(venta.toObject());
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -52,7 +77,7 @@ router.post('/', async (req, res) => {
 });
 
 // Editar ticket: modificar items (precio, cantidad), agregar o quitar productos. Ajusta inventario y recalcula total/ganancias.
-router.put('/:id', async (req, res) => {
+router.put('/:id', requiereAdmin, async (req, res) => {
   try {
     const ventaId = Number(req.params.id);
     const venta = await Venta.findOne({ id: ventaId });
@@ -93,6 +118,7 @@ router.put('/:id', async (req, res) => {
     }
 
     // 2) Descontar del inventario lo que tendrá la venta nueva
+    const yaDescontados = [];
     for (const it of itemsNuevos) {
       if (it.cantidad > 0 && it.id != null) {
         const prod = await Producto.findOne({ id: it.id });
@@ -100,7 +126,10 @@ router.put('/:id', async (req, res) => {
           const stockActual = Number(prod.stock) || 0;
           const nuevoStock = stockActual - it.cantidad;
           if (nuevoStock < 0) {
-            // Revertir lo que ya devolvimos
+            // Revertir lo que ya se descontó de la venta nueva y lo que devolvimos
+            for (const d of yaDescontados) {
+              await Producto.findOneAndUpdate({ id: d.id }, { $inc: { stock: d.cantidad } });
+            }
             for (const prev of itemsViejos) {
               const c = Number(prev.cantidad) || 0;
               if (c > 0 && prev.id != null) {
@@ -115,11 +144,12 @@ router.put('/:id', async (req, res) => {
             { id: it.id },
             { $inc: { stock: -it.cantidad } }
           );
+          yaDescontados.push(it);
         }
       }
     }
 
-    const nuevoTotal = itemsNuevos.reduce((sum, it) => sum + it.precio * it.cantidad, 0);
+    const nuevoTotal = redondear2(itemsNuevos.reduce((sum, it) => sum + it.precio * it.cantidad, 0));
     const pagado = Number(venta.pagado) ?? 0;
     const nuevoPendiente = Math.max(0, nuevoTotal - pagado);
     venta.items = itemsNuevos;
@@ -133,12 +163,14 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-router.put('/:id/abonar', async (req, res) => {
+router.put('/:id/abonar', requiereSesion, async (req, res) => {
   try {
-    const { monto } = req.body;
+    const monto = Number(req.body?.monto);
+    if (!Number.isFinite(monto) || monto <= 0) return res.status(400).json({ error: 'El abono debe ser mayor a 0' });
     const venta = await Venta.findOne({ id: Number(req.params.id) });
     if (!venta) return res.status(404).json({ error: 'Venta no encontrada' });
-    const nuevoPagado = (venta.pagado || 0) + Number(monto);
+    if (monto > (venta.pendiente || 0) + 0.005) return res.status(400).json({ error: 'El abono es mayor a lo pendiente' });
+    const nuevoPagado = redondear2((venta.pagado || 0) + monto);
     const nuevoPendiente = Math.max(0, venta.total - nuevoPagado);
     venta.pagado = nuevoPagado;
     venta.pendiente = nuevoPendiente;

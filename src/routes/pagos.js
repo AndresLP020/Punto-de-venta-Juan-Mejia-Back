@@ -1,15 +1,20 @@
 import { Router } from 'express';
+import crypto from 'crypto';
 import Stripe from 'stripe';
 import { MercadoPagoConfig, Preference, Payment } from 'mercadopago';
 import { Pedido } from '../models/Pedido.js';
 import { ConfigPago } from '../models/ConfigPago.js';
-import { descontarStockPedido } from './pedidos.js';
+import { descontarStockPedido, puedeVerPedido } from './pedidos.js';
 import { notificarPagoEnLinea } from '../notificaciones.js';
+import { requiereAdmin } from '../seguridad.js';
 
 const router = Router();
 const ahora = () => new Date().toISOString();
 const CURRENCY = (process.env.CURRENCY || 'mxn').toLowerCase();
-const FRONT_URL = process.env.FRONT_URL || 'http://localhost:3000';
+// Primera URL de FRONT_URL (puede traer varias separadas por coma para CORS)
+const frontUrl = () => (process.env.FRONT_URL || 'http://localhost:3000').split(',')[0].trim().replace(/\/$/, '');
+const enlacePedido = (pedido, pago) =>
+  `${frontUrl()}/pedido/${pedido.id}?${pedido.token ? `t=${pedido.token}&` : ''}pago=${pago}`;
 
 // --- Inicialización perezosa de las pasarelas ---
 function claveStripe() {
@@ -68,12 +73,12 @@ function getMP() {
 async function leerBanco() {
   const cfg = await ConfigPago.findOne({ clave: 'pagos' }).lean();
   return {
-    titular: cfg?.titular || process.env.BANK_HOLDER || 'Andres Lopez Piña',
-    banco: cfg?.banco || process.env.BANK_NAME || 'Mercado Pago',
-    cuenta: cfg?.cuenta || process.env.BANK_ACCOUNT || '5428785233937142',
+    titular: cfg?.titular || process.env.BANK_HOLDER || '',
+    banco: cfg?.banco || process.env.BANK_NAME || '',
+    cuenta: cfg?.cuenta || process.env.BANK_ACCOUNT || '',
     clabe: cfg?.clabe || process.env.BANK_CLABE || '',
-    tarjeta: cfg?.tarjeta || process.env.BANK_CARD || '5428785233937142',
-    whatsapp: cfg?.whatsapp || process.env.WHATSAPP_NUMBER || '527121537999',
+    tarjeta: cfg?.tarjeta || process.env.BANK_CARD || '',
+    whatsapp: cfg?.whatsapp || process.env.WHATSAPP_NUMBER || '',
     costoEnvio: cfg?.costoEnvio != null ? Number(cfg.costoEnvio) : 10,
   };
 }
@@ -110,22 +115,23 @@ router.get('/config', async (_req, res) => {
 });
 
 // PUT /api/pagos/config — el administrador guarda titular, cuenta y CLABE
-router.put('/config', async (req, res) => {
+router.put('/config', requiereAdmin, async (req, res) => {
   try {
     const { titular, banco, cuenta, clabe, tarjeta, whatsapp, costoEnvio } = req.body || {};
+    // Solo se actualizan los campos que se envían; los demás se conservan
+    const cambios = {};
+    for (const [k, v] of Object.entries({ titular, banco, cuenta, clabe, tarjeta })) {
+      if (v != null) cambios[k] = String(v).trim();
+    }
+    if (whatsapp != null) cambios.whatsapp = String(whatsapp).replace(/\D/g, '');
+    if (costoEnvio != null && costoEnvio !== '') {
+      const envio = Number(costoEnvio);
+      if (!Number.isFinite(envio) || envio < 0) return res.status(400).json({ error: 'La comisión de envío no es válida' });
+      cambios.costoEnvio = Math.round(envio * 100) / 100;
+    }
     const doc = await ConfigPago.findOneAndUpdate(
       { clave: 'pagos' },
-      {
-        $set: {
-          titular: titular != null ? String(titular).trim() : '',
-          banco: banco != null ? String(banco).trim() : '',
-          cuenta: cuenta != null ? String(cuenta).trim() : '',
-          clabe: clabe != null ? String(clabe).trim() : '',
-          tarjeta: tarjeta != null ? String(tarjeta).trim() : '',
-          whatsapp: whatsapp != null ? String(whatsapp).replace(/\D/g, '') : '',
-          costoEnvio: costoEnvio != null ? Number(costoEnvio) : 10,
-        },
-      },
+      { $set: cambios },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
     res.json({
@@ -172,9 +178,12 @@ router.post('/stripe/checkout', async (req, res) => {
       });
     }
     const pedido = await Pedido.findOne({ id: Number(req.body.pedidoId) });
-    if (!pedido) return res.status(404).json({ error: 'Pedido no encontrado' });
+    if (!puedeVerPedido(req, pedido)) return res.status(404).json({ error: 'Pedido no encontrado' });
     if (pedido.estadoPago === 'pagado') {
       return res.status(400).json({ error: 'Este pedido ya está pagado' });
+    }
+    if (pedido.estadoPago === 'rechazado' || pedido.estadoPedido === 'cancelado') {
+      return res.status(400).json({ error: 'Este pedido fue cancelado' });
     }
 
     const line_items = (pedido.items || []).map((it) => ({
@@ -211,8 +220,8 @@ router.post('/stripe/checkout', async (req, res) => {
       custom_text: {
         submit: { message: 'Pago seguro con Stripe · ARISE Athletic Shop' },
       },
-      success_url: `${FRONT_URL}/pedido/${pedido.id}?pago=exito`,
-      cancel_url: `${FRONT_URL}/pedido/${pedido.id}?pago=cancelado`,
+      success_url: enlacePedido(pedido, 'exito'),
+      cancel_url: enlacePedido(pedido, 'cancelado'),
       customer_email: pedido.cliente?.email || undefined,
     });
 
@@ -232,7 +241,7 @@ router.post('/stripe/confirmar', async (req, res) => {
     const stripe = getStripe();
     if (!stripe) return res.status(503).json({ error: 'Stripe no está configurado' });
     const pedido = await Pedido.findOne({ id: Number(req.body.pedidoId) });
-    if (!pedido) return res.status(404).json({ error: 'Pedido no encontrado' });
+    if (!puedeVerPedido(req, pedido)) return res.status(404).json({ error: 'Pedido no encontrado' });
     if (pedido.estadoPago === 'pagado') return res.json(pedido);
     if (!pedido.stripeSessionId) {
       return res.status(400).json({ error: 'Este pedido no tiene un pago de Stripe' });
@@ -284,7 +293,11 @@ router.post('/mercadopago/preference', async (req, res) => {
     const client = getMP();
     if (!client) return res.status(503).json({ error: 'Mercado Pago no está configurado' });
     const pedido = await Pedido.findOne({ id: Number(req.body.pedidoId) });
-    if (!pedido) return res.status(404).json({ error: 'Pedido no encontrado' });
+    if (!puedeVerPedido(req, pedido)) return res.status(404).json({ error: 'Pedido no encontrado' });
+    if (pedido.estadoPago === 'pagado') return res.status(400).json({ error: 'Este pedido ya está pagado' });
+    if (pedido.estadoPago === 'rechazado' || pedido.estadoPedido === 'cancelado') {
+      return res.status(400).json({ error: 'Este pedido fue cancelado' });
+    }
 
     const items = (pedido.items || []).map((it) => ({
       title: it.nombre || 'Producto',
@@ -308,9 +321,9 @@ router.post('/mercadopago/preference', async (req, res) => {
         metadata: { pedido_id: pedido.id },
         external_reference: String(pedido.id),
         back_urls: {
-          success: `${FRONT_URL}/pedido/${pedido.id}?pago=exito`,
-          failure: `${FRONT_URL}/pedido/${pedido.id}?pago=cancelado`,
-          pending: `${FRONT_URL}/pedido/${pedido.id}?pago=pendiente`,
+          success: enlacePedido(pedido, 'exito'),
+          failure: enlacePedido(pedido, 'cancelado'),
+          pending: enlacePedido(pedido, 'pendiente'),
         },
         auto_return: 'approved',
         notification_url: `${process.env.PUBLIC_API_URL || ''}/api/pagos/mercadopago/webhook`,
@@ -326,37 +339,85 @@ router.post('/mercadopago/preference', async (req, res) => {
   }
 });
 
+// Marca pagado un pedido a partir de un pago de Mercado Pago consultado a su API
+async function aplicarPagoMP(paymentId, pedidoEsperado) {
+  const client = getMP();
+  if (!client || !paymentId) return null;
+  const info = await new Payment(client).get({ id: paymentId });
+  if (!info || info.status !== 'approved') return null;
+  const pedidoId = Number(info.external_reference || info.metadata?.pedido_id);
+  if (!pedidoId || (pedidoEsperado && pedidoEsperado.id !== pedidoId)) return null;
+  const pedido = pedidoEsperado || (await Pedido.findOne({ id: pedidoId }));
+  if (!pedido || pedido.estadoPago === 'pagado' || pedido.estadoPago === 'rechazado') return pedido;
+  // El monto cobrado debe cubrir el total del pedido
+  if (Number(info.transaction_amount) + 0.01 < Number(pedido.total)) {
+    console.error(`MP: pago ${paymentId} por ${info.transaction_amount} no cubre el pedido #${pedido.id} (${pedido.total})`);
+    return pedido;
+  }
+  pedido.estadoPago = 'pagado';
+  if (pedido.estadoPedido === 'nuevo' || pedido.estadoPedido === 'cancelado') pedido.estadoPedido = 'confirmado';
+  pedido.mpPaymentId = String(paymentId);
+  await descontarStockPedido(pedido);
+  pedido.actualizadoEn = ahora();
+  await pedido.save();
+  notificarPagoEnLinea(pedido.toObject());
+  return pedido;
+}
+
+// Verifica la firma x-signature de Mercado Pago (si MERCADOPAGO_WEBHOOK_SECRET está configurado)
+function firmaMPValida(req, dataId) {
+  const secret = process.env.MERCADOPAGO_WEBHOOK_SECRET;
+  if (!secret) return true;
+  const partes = Object.fromEntries(
+    String(req.headers['x-signature'] || '')
+      .split(',')
+      .map((p) => p.split('=').map((x) => x.trim()))
+      .filter((p) => p.length === 2)
+  );
+  if (!partes.ts || !partes.v1) return false;
+  const requestId = req.headers['x-request-id'];
+  let manifiesto = '';
+  if (dataId) manifiesto += `id:${String(dataId).toLowerCase()};`;
+  if (requestId) manifiesto += `request-id:${requestId};`;
+  manifiesto += `ts:${partes.ts};`;
+  const esperada = crypto.createHmac('sha256', secret).update(manifiesto).digest('hex');
+  return esperada.length === partes.v1.length && crypto.timingSafeEqual(Buffer.from(esperada), Buffer.from(partes.v1));
+}
+
 // Webhook / IPN de Mercado Pago
 router.post('/mercadopago/webhook', async (req, res) => {
   try {
-    const client = getMP();
-    if (!client) return res.sendStatus(200);
+    if (!getMP()) return res.sendStatus(200);
     const paymentId = req.query['data.id'] || req.body?.data?.id || req.query.id;
     const tipo = req.query.type || req.body?.type;
+    if (!firmaMPValida(req, req.query['data.id'] || req.body?.data?.id)) {
+      console.error('MP webhook: firma inválida');
+      return res.sendStatus(401);
+    }
     if ((tipo === 'payment' || req.query.topic === 'payment') && paymentId) {
-      const payment = new Payment(client);
-      const info = await payment.get({ id: paymentId });
-      if (info && info.status === 'approved') {
-        const pedidoId = Number(info.external_reference || info.metadata?.pedido_id);
-        if (pedidoId) {
-          const pedido = await Pedido.findOne({ id: pedidoId });
-          if (pedido && pedido.estadoPago !== 'pagado') {
-            pedido.estadoPago = 'pagado';
-            pedido.estadoPedido = 'confirmado';
-            pedido.mpPaymentId = String(paymentId);
-            await descontarStockPedido(pedido);
-            pedido.actualizadoEn = ahora();
-            await pedido.save();
-            notificarPagoEnLinea(pedido.toObject());
-          }
-        }
-      }
+      await aplicarPagoMP(paymentId);
     }
     res.sendStatus(200);
   } catch (err) {
     // Mercado Pago reintenta si no respondemos 200; registramos y respondemos 200
     console.error('MP webhook error:', err.message);
     res.sendStatus(200);
+  }
+});
+
+// POST /api/pagos/mercadopago/confirmar { pedidoId, paymentId }
+// El cliente vuelve de Mercado Pago: consultamos el pago por si el webhook aún no llega.
+router.post('/mercadopago/confirmar', async (req, res) => {
+  try {
+    if (!getMP()) return res.status(503).json({ error: 'Mercado Pago no está configurado' });
+    const pedido = await Pedido.findOne({ id: Number(req.body?.pedidoId) });
+    if (!puedeVerPedido(req, pedido)) return res.status(404).json({ error: 'Pedido no encontrado' });
+    if (pedido.estadoPago !== 'pagado' && req.body?.paymentId) {
+      await aplicarPagoMP(String(req.body.paymentId), pedido);
+    }
+    res.json(pedido.toObject());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

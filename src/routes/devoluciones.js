@@ -2,10 +2,11 @@ import { Router } from 'express';
 import { getNextId } from '../db.js';
 import { Devolucion } from '../models/Devolucion.js';
 import { Producto } from '../models/Producto.js';
+import { requiereAdmin, requiereSesion } from '../seguridad.js';
 
 const router = Router();
 
-router.get('/', async (req, res) => {
+router.get('/', requiereSesion, async (req, res) => {
   try {
     const devoluciones = await Devolucion.find().sort({ id: -1 }).lean();
     res.json(devoluciones);
@@ -15,7 +16,7 @@ router.get('/', async (req, res) => {
 });
 
 /** Lista aplanada de ítems con tipo "perdida" para el apartado de pérdidas */
-router.get('/perdidas', async (req, res) => {
+router.get('/perdidas', requiereSesion, async (req, res) => {
   try {
     const devoluciones = await Devolucion.find().sort({ id: -1 }).lean();
     const perdidas = [];
@@ -41,7 +42,7 @@ router.get('/perdidas', async (req, res) => {
   }
 });
 
-router.post('/', async (req, res) => {
+router.post('/', requiereAdmin, async (req, res) => {
   try {
     const { ventaId, items } = req.body;
     const ventaIdNum = ventaId != null && ventaId !== '' ? Number(ventaId) : 0;

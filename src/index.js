@@ -1,6 +1,6 @@
+import 'dotenv/config'; // primero: los módulos importados después ya ven las variables del .env
 import express from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
 
 import { conectarMongo } from './db.js';
 import productosRouter from './routes/productos.js';
@@ -20,8 +20,7 @@ import cuentasProveedoresRouter from './routes/cuentasProveedores.js';
 import ofertasRouter from './routes/ofertas.js';
 import pedidosRouter from './routes/pedidos.js';
 import pagosRouter, { stripeWebhookHandler } from './routes/pagos.js';
-
-dotenv.config(); // Carga .env (Stripe, WhatsApp, Mongo)
+import { requiereSesion, requiereAdmin } from './seguridad.js';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -67,20 +66,23 @@ app.use(express.json({ limit: '12mb' }));
 
 app.get('/api/health', (_, res) => res.json({ ok: true, message: 'POS API' }));
 
-app.use('/api/productos', productosRouter);
-app.use('/api/ventas', ventasRouter);
-app.use('/api/categorias', categoriasRouter);
-app.use('/api/clientes', clientesRouter);
-app.use('/api/proveedores', proveedoresRouter);
-app.use('/api/cuentas-proveedores', cuentasProveedoresRouter);
-app.use('/api/deudas', deudasRouter);
-app.use('/api/gastos-admin', gastosAdminRouter);
-app.use('/api/empleados', empleadosRouter);
-app.use('/api/nominas', nominasRouter);
-app.use('/api/adelantos', adelantosRouter);
-app.use('/api/devoluciones', devolucionesRouter);
-app.use('/api/usuarios', usuariosRouter);
+// Rutas públicas o con permisos por ruta (tienda en línea + POS)
 app.use('/api/auth', authRouter);
+app.use('/api/productos', productosRouter);
+app.use('/api/categorias', categoriasRouter);
+app.use('/api/ventas', ventasRouter);
+app.use('/api/devoluciones', devolucionesRouter);
+// Solo personal con sesión iniciada
+app.use('/api/clientes', requiereSesion, clientesRouter);
+app.use('/api/proveedores', requiereSesion, proveedoresRouter);
+app.use('/api/cuentas-proveedores', requiereSesion, cuentasProveedoresRouter);
+// Solo modo administrador
+app.use('/api/deudas', requiereAdmin, deudasRouter);
+app.use('/api/gastos-admin', requiereAdmin, gastosAdminRouter);
+app.use('/api/empleados', requiereAdmin, empleadosRouter);
+app.use('/api/nominas', requiereAdmin, nominasRouter);
+app.use('/api/adelantos', requiereAdmin, adelantosRouter);
+app.use('/api/usuarios', requiereAdmin, usuariosRouter);
 app.use('/api/ofertas', ofertasRouter);
 app.use('/api/pedidos', pedidosRouter);
 app.use('/api/pagos', pagosRouter);

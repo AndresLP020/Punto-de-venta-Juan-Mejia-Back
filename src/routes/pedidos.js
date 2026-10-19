@@ -2,12 +2,14 @@ import { Router } from 'express';
 import { getNextId } from '../db.js';
 import { Pedido } from '../models/Pedido.js';
 import { Producto } from '../models/Producto.js';
+import { ConfigPago } from '../models/ConfigPago.js';
 import {
   notificarPedidoTransferencia,
   notificarComprobante,
   notificarPagoConfirmado,
   notificarPagoRechazado,
 } from '../notificaciones.js';
+import { requiereAdmin, requiereSesion, sesionDe, tokenPedido } from '../seguridad.js';
 
 const router = Router();
 const redondear2 = (n) => Math.round(Number(n) * 100) / 100;
@@ -24,8 +26,29 @@ export async function descontarStockPedido(pedido) {
   pedido.stockDescontado = true;
 }
 
+// Regresa al inventario lo descontado (pedido cancelado, rechazado o borrado).
+export async function restaurarStockPedido(pedido) {
+  if (!pedido || !pedido.stockDescontado) return;
+  for (const it of pedido.items || []) {
+    if (it.id != null && Number(it.cantidad) > 0) {
+      await Producto.findOneAndUpdate({ id: it.id }, { $inc: { stock: Number(it.cantidad) } });
+    }
+  }
+  pedido.stockDescontado = false;
+}
+
+// El personal con sesión ve cualquier pedido; el cliente necesita el token de su enlace.
+// Los pedidos anteriores a los tokens (sin token) siguen abiertos.
+export function puedeVerPedido(req, pedido) {
+  if (!pedido) return false;
+  if (!pedido.token) return true;
+  if (sesionDe(req)) return true;
+  const t = req.query?.t || req.body?.t || req.headers['x-pedido-token'];
+  return t === pedido.token;
+}
+
 // GET /api/pedidos?estadoPago=&estadoPedido=&metodoPago=
-router.get('/', async (req, res) => {
+router.get('/', requiereSesion, async (req, res) => {
   try {
     const { estadoPago, estadoPedido, metodoPago } = req.query;
     const query = {};
@@ -42,6 +65,7 @@ router.get('/', async (req, res) => {
         resumen.map(({ comprobante, ...p }) => ({ ...p, tieneComprobante: Boolean(comprobante) }))
       );
     }
+    if (!req.sesion.admin) return res.status(403).json({ error: 'Requiere modo administrador' });
     const pedidos = await Pedido.find(query).sort({ id: -1 }).lean();
     res.json(pedidos);
   } catch (err) {
@@ -52,15 +76,17 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const p = await Pedido.findOne({ id: Number(req.params.id) }).lean();
-    if (!p) return res.status(404).json({ error: 'Pedido no encontrado' });
+    if (!puedeVerPedido(req, p)) return res.status(404).json({ error: 'Pedido no encontrado' });
     res.json(p);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-function parseCheckoutBody(body) {
-  const { items, cliente, entrega, metodoPago, envio, notas } = body || {};
+// Valida el checkout. Precios, nombres y costo de envío se toman de la base de datos,
+// nunca de lo que manda el navegador.
+async function parseCheckoutBody(body) {
+  const { items, cliente, entrega, metodoPago, notas } = body || {};
   const listaItems = Array.isArray(items) ? items : [];
   if (listaItems.length === 0) return { error: 'El pedido no tiene productos' };
   const metodosValidos = ['efectivo', 'transferencia', 'stripe', 'mercadopago'];
@@ -72,18 +98,46 @@ function parseCheckoutBody(body) {
   if (tipoEntrega === 'envio' && (!cli.direccion || !String(cli.direccion).trim())) {
     return { error: 'La dirección es obligatoria para envío a domicilio' };
   }
-  const itemsNorm = listaItems.map((it) => ({
-    id: Number(it.id),
-    nombre: String(it.nombre || 'Producto'),
-    precio: redondear2(it.precio) || 0,
-    cantidad: Number(it.cantidad) || 0,
-    costo: it.costo != null ? Number(it.costo) : 0,
-    esGranel: Boolean(it.esGranel),
-    imagen: it.imagen || '',
-  })).filter((it) => it.cantidad > 0);
-  if (itemsNorm.length === 0) return { error: 'El pedido no tiene productos válidos' };
+
+  // Une cantidades repetidas del mismo producto
+  const cantidades = new Map();
+  for (const it of listaItems) {
+    const id = Number(it.id);
+    const cant = Number(it.cantidad) || 0;
+    if (!Number.isFinite(id) || cant <= 0) continue;
+    cantidades.set(id, (cantidades.get(id) || 0) + cant);
+  }
+  if (cantidades.size === 0) return { error: 'El pedido no tiene productos válidos' };
+
+  const productos = await Producto.find({ id: { $in: [...cantidades.keys()] } }).lean();
+  const porId = new Map(productos.map((p) => [p.id, p]));
+  const itemsNorm = [];
+  for (const [id, cantPedida] of cantidades) {
+    const prod = porId.get(id);
+    if (!prod || prod.estado === 'Inactivo') {
+      return { error: 'Uno de los productos ya no está disponible. Actualiza tu carrito.' };
+    }
+    const cantidad = prod.esGranel ? Math.round(cantPedida * 1000) / 1000 : Math.max(1, Math.round(cantPedida));
+    const stock = Number(prod.stock) || 0;
+    if (cantidad > stock) {
+      return { error: stock > 0 ? `Solo quedan ${stock} de "${prod.nombre}".` : `"${prod.nombre}" está agotado.` };
+    }
+    itemsNorm.push({
+      id: prod.id,
+      nombre: prod.nombre || 'Producto',
+      precio: redondear2(prod.precio) || 0,
+      cantidad,
+      costo: Number(prod.costo) || 0,
+      esGranel: Boolean(prod.esGranel),
+      imagen: prod.imagen && !String(prod.imagen).startsWith('data:') ? prod.imagen : '',
+    });
+  }
   const subtotal = redondear2(itemsNorm.reduce((s, it) => s + it.precio * it.cantidad, 0));
-  const costoEnvio = tipoEntrega === 'envio' ? (redondear2(envio) || 0) : 0;
+  let costoEnvio = 0;
+  if (tipoEntrega === 'envio') {
+    const cfg = await ConfigPago.findOne({ clave: 'pagos' }).lean();
+    costoEnvio = redondear2(cfg?.costoEnvio != null ? cfg.costoEnvio : 10) || 0;
+  }
   const total = redondear2(subtotal + costoEnvio);
   let estadoPago = 'pendiente';
   if (metodoPago === 'transferencia') estadoPago = 'en_revision';
@@ -95,13 +149,13 @@ function parseCheckoutBody(body) {
     subtotal,
     costoEnvio,
     total,
-    notas: notas ? String(notas) : '',
+    notas: notas ? String(notas).slice(0, 1000) : '',
     cliente: {
-      nombre: String(cli.nombre).trim(),
-      telefono: String(cli.telefono).trim(),
-      email: cli.email ? String(cli.email).trim() : '',
-      direccion: cli.direccion ? String(cli.direccion).trim() : '',
-      referencias: cli.referencias ? String(cli.referencias).trim() : '',
+      nombre: String(cli.nombre).trim().slice(0, 120),
+      telefono: String(cli.telefono).trim().slice(0, 40),
+      email: cli.email ? String(cli.email).trim().slice(0, 120) : '',
+      direccion: cli.direccion ? String(cli.direccion).trim().slice(0, 300) : '',
+      referencias: cli.referencias ? String(cli.referencias).trim().slice(0, 300) : '',
     },
   };
 }
@@ -117,7 +171,7 @@ function pedidoSePuedeEditar(pedido) {
 // Crear pedido desde el carrito de la web
 router.post('/', async (req, res) => {
   try {
-    const datos = parseCheckoutBody(req.body);
+    const datos = await parseCheckoutBody(req.body);
     if (datos.error) return res.status(400).json({ error: datos.error });
     const id = await getNextId(Pedido);
     const pedido = await Pedido.create({
@@ -133,6 +187,7 @@ router.post('/', async (req, res) => {
       estadoPago: datos.estadoPago,
       estadoPedido: 'nuevo',
       notas: datos.notas,
+      token: tokenPedido(),
       creadoEn: ahora(),
       actualizadoEn: ahora(),
     });
@@ -147,11 +202,11 @@ router.post('/', async (req, res) => {
 router.put('/:id/checkout', async (req, res) => {
   try {
     const pedido = await Pedido.findOne({ id: Number(req.params.id) });
-    if (!pedido) return res.status(404).json({ error: 'Pedido no encontrado' });
+    if (!puedeVerPedido(req, pedido)) return res.status(404).json({ error: 'Pedido no encontrado' });
     if (!pedidoSePuedeEditar(pedido)) {
       return res.status(400).json({ error: 'Este pedido ya no se puede modificar' });
     }
-    const datos = parseCheckoutBody(req.body);
+    const datos = await parseCheckoutBody(req.body);
     if (datos.error) return res.status(400).json({ error: datos.error });
     const cambioATransferencia = pedido.metodoPago !== 'transferencia' && datos.metodoPago === 'transferencia';
     pedido.items = datos.itemsNorm;
@@ -178,9 +233,16 @@ router.post('/:id/comprobante', async (req, res) => {
   try {
     const { comprobante } = req.body;
     if (!comprobante) return res.status(400).json({ error: 'Falta el comprobante' });
+    const texto = String(comprobante);
+    if (!/^data:image\/[a-z0-9.+-]+;base64,/i.test(texto) && !/^https?:\/\//i.test(texto)) {
+      return res.status(400).json({ error: 'El comprobante debe ser una imagen' });
+    }
     const pedido = await Pedido.findOne({ id: Number(req.params.id) });
-    if (!pedido) return res.status(404).json({ error: 'Pedido no encontrado' });
-    pedido.comprobante = String(comprobante);
+    if (!puedeVerPedido(req, pedido)) return res.status(404).json({ error: 'Pedido no encontrado' });
+    if (pedido.estadoPago === 'pagado' || pedido.estadoPago === 'rechazado') {
+      return res.status(400).json({ error: 'Este pedido ya no admite comprobantes' });
+    }
+    pedido.comprobante = texto;
     if (pedido.metodoPago === 'transferencia' && pedido.estadoPago !== 'pagado') {
       pedido.estadoPago = 'en_revision';
     }
@@ -194,7 +256,7 @@ router.post('/:id/comprobante', async (req, res) => {
 });
 
 // Admin: confirma que el pago cayó -> arma el pedido y descuenta stock
-router.put('/:id/verificar', async (req, res) => {
+router.put('/:id/verificar', requiereAdmin, async (req, res) => {
   try {
     const pedido = await Pedido.findOne({ id: Number(req.params.id) });
     if (!pedido) return res.status(404).json({ error: 'Pedido no encontrado' });
@@ -217,7 +279,7 @@ router.put('/:id/verificar', async (req, res) => {
 });
 
 // Admin: rechaza el pago (no cayó el depósito) -> se omite el pedido
-router.put('/:id/rechazar', async (req, res) => {
+router.put('/:id/rechazar', requiereAdmin, async (req, res) => {
   try {
     const { motivo } = req.body || {};
     const pedido = await Pedido.findOne({ id: Number(req.params.id) });
@@ -225,6 +287,7 @@ router.put('/:id/rechazar', async (req, res) => {
     const yaRechazado = pedido.estadoPago === 'rechazado';
     pedido.estadoPago = 'rechazado';
     pedido.estadoPedido = 'cancelado';
+    await restaurarStockPedido(pedido);
     if (motivo) pedido.notas = `${pedido.notas ? pedido.notas + ' | ' : ''}Rechazado: ${motivo}`;
     pedido.actualizadoEn = ahora();
     await pedido.save();
@@ -236,7 +299,7 @@ router.put('/:id/rechazar', async (req, res) => {
 });
 
 // Admin: actualizar estado logístico del pedido
-router.put('/:id/estado', async (req, res) => {
+router.put('/:id/estado', requiereAdmin, async (req, res) => {
   try {
     const { estadoPedido } = req.body || {};
     const validos = ['nuevo', 'confirmado', 'preparando', 'listo', 'entregado', 'cancelado'];
@@ -245,6 +308,11 @@ router.put('/:id/estado', async (req, res) => {
     }
     const pedido = await Pedido.findOne({ id: Number(req.params.id) });
     if (!pedido) return res.status(404).json({ error: 'Pedido no encontrado' });
+    if (estadoPedido === 'cancelado') {
+      await restaurarStockPedido(pedido);
+    } else if (pedido.estadoPago === 'pagado') {
+      await descontarStockPedido(pedido); // se reactiva un pedido pagado que estaba cancelado
+    }
     pedido.estadoPedido = estadoPedido;
     pedido.actualizadoEn = ahora();
     await pedido.save();
@@ -254,10 +322,12 @@ router.put('/:id/estado', async (req, res) => {
   }
 });
 
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', requiereAdmin, async (req, res) => {
   try {
-    const r = await Pedido.deleteOne({ id: Number(req.params.id) });
-    if (r.deletedCount === 0) return res.status(404).json({ error: 'Pedido no encontrado' });
+    const pedido = await Pedido.findOne({ id: Number(req.params.id) });
+    if (!pedido) return res.status(404).json({ error: 'Pedido no encontrado' });
+    await restaurarStockPedido(pedido);
+    await Pedido.deleteOne({ id: pedido.id });
     res.status(204).send();
   } catch (err) {
     res.status(500).json({ error: err.message });

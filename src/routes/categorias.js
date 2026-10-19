@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { Categoria } from '../models/Categoria.js';
+import { requierePermiso } from '../seguridad.js';
 
 const router = Router();
 
@@ -12,7 +13,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-router.post('/', async (req, res) => {
+router.post('/', requierePermiso('actualizarProductos'), async (req, res) => {
   try {
     const { nombre } = req.body;
     const name = String(nombre || '').trim();
@@ -28,7 +29,7 @@ router.post('/', async (req, res) => {
   }
 });
 
-router.delete('/:nombre', async (req, res) => {
+router.delete('/:nombre', requierePermiso('actualizarProductos'), async (req, res) => {
   try {
     const nombre = decodeURIComponent(req.params.nombre);
     const r = await Categoria.deleteOne({ nombre });

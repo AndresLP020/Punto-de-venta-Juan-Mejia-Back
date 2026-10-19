@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { getNextId } from '../db.js';
 import { Usuario } from '../models/Usuario.js';
+import { hashPassword } from '../seguridad.js';
 
 const router = Router();
 
@@ -54,13 +55,14 @@ router.post('/', async (req, res) => {
   try {
     const { email, password, nombre, telefono, permisos } = req.body;
     if (!email || !password) return res.status(400).json({ error: 'Email y contraseña son requeridos' });
+    if (String(password).length < 6) return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
     const existe = await Usuario.findOne({ email: String(email).trim().toLowerCase() });
     if (existe) return res.status(400).json({ error: 'Ya existe un usuario con ese correo' });
     const id = await getNextId(Usuario);
     const usuario = await Usuario.create({
       id,
       email: String(email).trim().toLowerCase(),
-      password: String(password),
+      password: hashPassword(password),
       nombre: nombre || '',
       telefono: telefono || '',
       permisos: {
@@ -81,8 +83,17 @@ router.put('/:id', async (req, res) => {
     const doc = await Usuario.findOne({ id: Number(req.params.id) });
     if (!doc) return res.status(404).json({ error: 'Usuario no encontrado' });
     const { email, password, nombre, telefono, permisos } = req.body;
-    if (email != null) doc.email = String(email).trim().toLowerCase();
-    if (password != null && String(password).length > 0) doc.password = String(password);
+    if (email != null) {
+      const nuevoEmail = String(email).trim().toLowerCase();
+      if (!nuevoEmail) return res.status(400).json({ error: 'El correo es obligatorio' });
+      const otro = await Usuario.findOne({ email: nuevoEmail, id: { $ne: doc.id } }).lean();
+      if (otro) return res.status(400).json({ error: 'Ya existe un usuario con ese correo' });
+      doc.email = nuevoEmail;
+    }
+    if (password != null && String(password).length > 0) {
+      if (String(password).length < 6) return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
+      doc.password = hashPassword(password);
+    }
     if (nombre != null) doc.nombre = String(nombre);
     if (telefono != null) doc.telefono = String(telefono);
     if (permisos != null) {

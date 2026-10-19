@@ -12,7 +12,16 @@ export async function conectarMongo() {
   }
 }
 
+// Contadores atómicos por colección: evita que dos registros creados al mismo tiempo reciban el mismo id.
+const Contador = mongoose.model(
+  'Contador',
+  new mongoose.Schema({ _id: String, seq: { type: Number, default: 0 } }, { versionKey: false })
+);
 export async function getNextId(Model) {
+  const nombre = Model.collection.collectionName;
+  // El contador nunca queda por debajo del id más alto existente (p. ej. tras cargar datos con un script)
   const last = await Model.findOne().sort({ id: -1 }).select('id').lean();
-  return (last?.id ?? 0) + 1;
+  await Contador.updateOne({ _id: nombre }, { $max: { seq: last?.id ?? 0 } }, { upsert: true });
+  const c = await Contador.findOneAndUpdate({ _id: nombre }, { $inc: { seq: 1 } }, { new: true, upsert: true });
+  return c.seq;
 }

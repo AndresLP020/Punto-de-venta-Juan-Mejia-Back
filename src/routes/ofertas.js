@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { getNextId } from '../db.js';
 import { Oferta } from '../models/Oferta.js';
+import { requiereAdmin } from '../seguridad.js';
 
 const router = Router();
 const redondear2 = (n) => Math.round(Number(n) * 100) / 100;
@@ -38,7 +39,7 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-router.post('/', async (req, res) => {
+router.post('/', requiereAdmin, async (req, res) => {
   try {
     const { titulo, descripcion, imagen, precioNormal, precioOferta, productos, activa, fechaInicio, fechaFin } = req.body;
     if (!titulo || !String(titulo).trim()) {
@@ -64,7 +65,7 @@ router.post('/', async (req, res) => {
   }
 });
 
-router.put('/:id', async (req, res) => {
+router.put('/:id', requiereAdmin, async (req, res) => {
   try {
     const doc = await Oferta.findOne({ id: Number(req.params.id) });
     if (!doc) return res.status(404).json({ error: 'Oferta no encontrada' });
@@ -85,7 +86,7 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', requiereAdmin, async (req, res) => {
   try {
     const r = await Oferta.deleteOne({ id: Number(req.params.id) });
     if (r.deletedCount === 0) return res.status(404).json({ error: 'Oferta no encontrada' });

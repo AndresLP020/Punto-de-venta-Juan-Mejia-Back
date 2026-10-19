@@ -17,6 +17,8 @@ function getTransporter() {
 }
 
 const frontUrl = () => (process.env.FRONT_URL || 'http://localhost:3000').split(',')[0].trim().replace(/\/$/, '');
+// Enlace al pedido con su token secreto (solo el cliente puede abrirlo)
+const enlacePedido = (pedido) => `${frontUrl()}/pedido/${pedido.id}${pedido.token ? `?t=${pedido.token}` : ''}`;
 const correoTienda = () => process.env.NOTIFY_EMAIL || process.env.SMTP_USER;
 const dinero = (n) => `$${Number(n || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -89,7 +91,7 @@ const esTransferencia = (p) => p?.metodoPago === 'transferencia';
 /** Pedido nuevo por transferencia: aviso a la tienda y confirmación al cliente. */
 export function notificarPedidoTransferencia(pedido) {
   if (!esTransferencia(pedido)) return;
-  const urlPedido = `${frontUrl()}/pedido/${pedido.id}`;
+  const urlPedido = enlacePedido(pedido);
   enSegundoPlano('pedido nuevo (tienda)', () =>
     enviar(
       correoTienda(),
@@ -164,7 +166,7 @@ export function notificarPagoConfirmado(pedido) {
             ? 'Ya estamos preparando tu pedido para enviarlo a tu domicilio.'
             : 'Ya estamos preparando tu pedido. Te avisaremos cuando esté listo para recoger en tienda.',
         pedido,
-        boton: { texto: 'Ver mi pedido', url: `${frontUrl()}/pedido/${pedido.id}` },
+        boton: { texto: 'Ver mi pedido', url: enlacePedido(pedido) },
       })
     )
   );
@@ -181,7 +183,7 @@ export function notificarPagoRechazado(pedido, motivo) {
         intro: 'No encontramos la transferencia de este pedido, por lo que fue cancelado. Si ya realizaste el pago, contáctanos respondiendo a este correo.',
         pedido,
         nota: motivo ? `Motivo: ${esc(motivo)}` : '',
-        boton: { texto: 'Ver mi pedido', url: `${frontUrl()}/pedido/${pedido.id}` },
+        boton: { texto: 'Ver mi pedido', url: enlacePedido(pedido) },
       })
     )
   );

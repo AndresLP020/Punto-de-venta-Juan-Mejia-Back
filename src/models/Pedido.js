@@ -57,6 +57,8 @@ const schema = new mongoose.Schema({
   notas: { type: String, default: '' },
   // Evita descontar stock dos veces
   stockDescontado: { type: Boolean, default: false },
+  // Token secreto del enlace del pedido: solo quien lo tiene puede verlo o modificarlo
+  token: { type: String, default: '' },
   creadoEn: { type: String },
   actualizadoEn: { type: String },
 });

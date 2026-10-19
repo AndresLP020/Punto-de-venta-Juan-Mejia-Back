@@ -27,7 +27,7 @@ function getLunesSemana(d) {
 
 router.post('/', async (req, res) => {
   try {
-    const { items, total, fecha } = req.body;
+    const { items, fecha } = req.body;
     const itemsArr = Array.isArray(items) ? items : [];
     const semanaRef = getLunesSemana(fecha || new Date());
     const itemsConDescuento = [];
@@ -60,7 +60,9 @@ router.post('/', async (req, res) => {
         adelantoDescontado: Math.round(adelantoDescontado * 100) / 100,
       });
     }
-    const totalNum = Number(total) ?? itemsConDescuento.reduce((s, i) => s + i.monto, 0);
+    if (itemsConDescuento.length === 0) return res.status(400).json({ error: 'Selecciona al menos un trabajador' });
+    // Total = lo que se paga hoy (sueldo bruto menos adelantos descontados). El adelanto ya se registró como gasto al entregarse.
+    const totalNum = Math.round(itemsConDescuento.reduce((s, i) => s + i.monto - i.adelantoDescontado, 0) * 100) / 100;
     const id = await getNextId(Nomina);
     const fechaIso = fecha ? new Date(fecha).toISOString() : new Date().toISOString();
     const nomina = await Nomina.create({

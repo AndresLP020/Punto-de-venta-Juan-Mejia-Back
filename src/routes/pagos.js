@@ -205,11 +205,11 @@ router.post('/stripe/checkout', async (req, res) => {
       metadata: { pedidoId: String(pedido.id) },
       payment_intent_data: {
         metadata: { pedidoId: String(pedido.id) },
-        description: `Nutri-Ala pedido #${pedido.id}`,
-        statement_descriptor: 'NUTRI-ALA',
+        description: `ARISE Athletic Shop pedido #${pedido.id}`,
+        statement_descriptor: 'ARISE ATHLETIC',
       },
       custom_text: {
-        submit: { message: 'Pago seguro con Stripe · Nutri-Ala' },
+        submit: { message: 'Pago seguro con Stripe · ARISE Athletic Shop' },
       },
       success_url: `${FRONT_URL}/pedido/${pedido.id}?pago=exito`,
       cancel_url: `${FRONT_URL}/pedido/${pedido.id}?pago=cancelado`,

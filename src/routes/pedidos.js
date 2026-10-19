@@ -2,6 +2,12 @@ import { Router } from 'express';
 import { getNextId } from '../db.js';
 import { Pedido } from '../models/Pedido.js';
 import { Producto } from '../models/Producto.js';
+import {
+  notificarPedidoTransferencia,
+  notificarComprobante,
+  notificarPagoConfirmado,
+  notificarPagoRechazado,
+} from '../notificaciones.js';
 
 const router = Router();
 const redondear2 = (n) => Math.round(Number(n) * 100) / 100;
@@ -26,6 +32,16 @@ router.get('/', async (req, res) => {
     if (estadoPago) query.estadoPago = estadoPago;
     if (estadoPedido) query.estadoPedido = estadoPedido;
     if (metodoPago) query.metodoPago = metodoPago;
+    // ?resumen=1 -> versión ligera (sin la imagen del comprobante) para los avisos del POS
+    if (req.query.resumen === '1') {
+      const resumen = await Pedido.find(query)
+        .sort({ id: -1 })
+        .select('id fecha total metodoPago estadoPago estadoPedido cliente.nombre comprobante')
+        .lean();
+      return res.json(
+        resumen.map(({ comprobante, ...p }) => ({ ...p, tieneComprobante: Boolean(comprobante) }))
+      );
+    }
     const pedidos = await Pedido.find(query).sort({ id: -1 }).lean();
     res.json(pedidos);
   } catch (err) {
@@ -120,6 +136,7 @@ router.post('/', async (req, res) => {
       creadoEn: ahora(),
       actualizadoEn: ahora(),
     });
+    notificarPedidoTransferencia(pedido.toObject());
     res.status(201).json(pedido.toObject());
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -136,6 +153,7 @@ router.put('/:id/checkout', async (req, res) => {
     }
     const datos = parseCheckoutBody(req.body);
     if (datos.error) return res.status(400).json({ error: datos.error });
+    const cambioATransferencia = pedido.metodoPago !== 'transferencia' && datos.metodoPago === 'transferencia';
     pedido.items = datos.itemsNorm;
     pedido.subtotal = datos.subtotal;
     pedido.envio = datos.costoEnvio;
@@ -148,6 +166,7 @@ router.put('/:id/checkout', async (req, res) => {
     if (datos.metodoPago !== 'transferencia') pedido.comprobante = '';
     pedido.actualizadoEn = ahora();
     await pedido.save();
+    if (cambioATransferencia) notificarPedidoTransferencia(pedido.toObject());
     res.json(pedido.toObject());
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -167,6 +186,7 @@ router.post('/:id/comprobante', async (req, res) => {
     }
     pedido.actualizadoEn = ahora();
     await pedido.save();
+    notificarComprobante(pedido.toObject());
     res.json(pedido.toObject());
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -181,6 +201,7 @@ router.put('/:id/verificar', async (req, res) => {
     if (pedido.estadoPago === 'rechazado') {
       return res.status(400).json({ error: 'El pedido fue rechazado; no se puede confirmar' });
     }
+    const yaPagado = pedido.estadoPago === 'pagado';
     pedido.estadoPago = 'pagado';
     if (pedido.estadoPedido === 'nuevo' || pedido.estadoPedido === 'cancelado') {
       pedido.estadoPedido = 'confirmado';
@@ -188,6 +209,7 @@ router.put('/:id/verificar', async (req, res) => {
     await descontarStockPedido(pedido);
     pedido.actualizadoEn = ahora();
     await pedido.save();
+    if (!yaPagado) notificarPagoConfirmado(pedido.toObject());
     res.json(pedido.toObject());
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -200,11 +222,13 @@ router.put('/:id/rechazar', async (req, res) => {
     const { motivo } = req.body || {};
     const pedido = await Pedido.findOne({ id: Number(req.params.id) });
     if (!pedido) return res.status(404).json({ error: 'Pedido no encontrado' });
+    const yaRechazado = pedido.estadoPago === 'rechazado';
     pedido.estadoPago = 'rechazado';
     pedido.estadoPedido = 'cancelado';
     if (motivo) pedido.notas = `${pedido.notas ? pedido.notas + ' | ' : ''}Rechazado: ${motivo}`;
     pedido.actualizadoEn = ahora();
     await pedido.save();
+    if (!yaRechazado) notificarPagoRechazado(pedido.toObject(), motivo);
     res.json(pedido.toObject());
   } catch (err) {
     res.status(500).json({ error: err.message });

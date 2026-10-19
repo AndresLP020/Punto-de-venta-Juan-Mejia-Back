@@ -4,6 +4,7 @@ import { MercadoPagoConfig, Preference, Payment } from 'mercadopago';
 import { Pedido } from '../models/Pedido.js';
 import { ConfigPago } from '../models/ConfigPago.js';
 import { descontarStockPedido } from './pedidos.js';
+import { notificarPagoEnLinea } from '../notificaciones.js';
 
 const router = Router();
 const ahora = () => new Date().toISOString();
@@ -149,6 +150,7 @@ async function marcarPedidoPagadoStripe(pedido, paymentIntentId) {
   await descontarStockPedido(pedido);
   pedido.actualizadoEn = ahora();
   await pedido.save();
+  notificarPagoEnLinea(pedido.toObject());
   return pedido;
 }
 
@@ -345,6 +347,7 @@ router.post('/mercadopago/webhook', async (req, res) => {
             await descontarStockPedido(pedido);
             pedido.actualizadoEn = ahora();
             await pedido.save();
+            notificarPagoEnLinea(pedido.toObject());
           }
         }
       }

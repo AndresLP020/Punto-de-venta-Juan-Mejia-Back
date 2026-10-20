@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { getNextId } from '../db.js';
 import { Proveedor } from '../models/Proveedor.js';
 import { CuentaProveedor } from '../models/CuentaProveedor.js';
+import { normalizarFecha, numero, redondear2, serverError, texto } from '../utils.js';
 
 const router = Router();
 
@@ -14,7 +15,7 @@ router.get('/:proveedorId', async (req, res) => {
     const movimientos = await CuentaProveedor.find({ proveedorId }).sort({ fecha: -1, id: -1 }).lean();
     res.json(movimientos);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    serverError(res, err);
   }
 });
 
@@ -46,7 +47,7 @@ router.get('/', async (req, res) => {
 
     res.json(Array.from(resumenMap.values()));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    serverError(res, err);
   }
 });
 
@@ -55,7 +56,7 @@ router.post('/', async (req, res) => {
   try {
     const { proveedorId, tipo, monto, descripcion, fecha } = req.body;
     const proveedorIdNum = Number(proveedorId);
-    const montoNum = Number(monto);
+    const montoNum = redondear2(numero(monto));
 
     if (!proveedorIdNum) return res.status(400).json({ error: 'proveedorId es requerido' });
     if (!tipo || (tipo !== 'deuda' && tipo !== 'pago')) {
@@ -76,14 +77,25 @@ router.post('/', async (req, res) => {
       proveedorId: proveedorIdNum,
       proveedorNombre: proveedor.nombre,
       tipo,
-      fecha: fecha ? new Date(fecha).toISOString() : nowIso,
-      descripcion: descripcion?.trim() || '',
+      fecha: normalizarFecha(fecha) ?? nowIso,
+      descripcion: texto(descripcion),
       monto: montoNum,
     });
 
     res.status(201).json(doc.toObject());
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    serverError(res, err);
+  }
+});
+
+// Eliminar un movimiento registrado por error.
+router.delete('/movimiento/:id', async (req, res) => {
+  try {
+    const r = await CuentaProveedor.deleteOne({ id: Number(req.params.id) });
+    if (r.deletedCount === 0) return res.status(404).json({ error: 'Movimiento no encontrado' });
+    res.status(204).send();
+  } catch (err) {
+    serverError(res, err);
   }
 });
 

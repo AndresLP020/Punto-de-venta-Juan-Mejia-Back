@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 
 const schema = new mongoose.Schema({
-  id: { type: Number, required: true },
+  id: { type: Number, required: true, unique: true },
   proveedorId: { type: Number, required: true },
   proveedorNombre: { type: String, required: true },
   tipo: { type: String, enum: ['deuda', 'pago'], required: true },

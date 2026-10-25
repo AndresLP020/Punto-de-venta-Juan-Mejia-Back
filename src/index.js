@@ -25,6 +25,7 @@ import usuariosRouter from './routes/usuarios.js';
 import authRouter from './routes/auth.js';
 import cuentasProveedoresRouter from './routes/cuentasProveedores.js';
 import lienzoCharroRouter from './routes/lienzoCharro.js';
+import ticketsRouter from './routes/tickets.js';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -85,6 +86,7 @@ app.use('/api/adelantos', requireAdmin, adelantosRouter);
 app.use('/api/devoluciones', requireAdmin, devolucionesRouter);
 app.use('/api/usuarios', requireAdmin, usuariosRouter);
 app.use('/api/lienzo-charro', requireAdmin, lienzoCharroRouter);
+app.use('/api/tickets', ticketsRouter);
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'Ruta no encontrada' }));
 

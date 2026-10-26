@@ -23,7 +23,10 @@ const schema = new mongoose.Schema({
   /** Dinero devuelto al cliente (devoluciones, correcciones de ticket, cancelación). */
   reembolsos: { type: [movimientoSchema], default: [] },
   fechaCancelacion: String,
+  /** Email/usuario de login de quien hizo la venta. */
   usuario: String,
+  /** Nombre visible de quien hizo la venta (se imprime en el ticket). */
+  usuarioNombre: String,
 });
 
 schema.index({ fecha: -1 });

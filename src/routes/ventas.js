@@ -147,6 +147,7 @@ router.post('/', requirePermiso('hacerVentas'), async (req, res) => {
         abonos: [],
         reembolsos: [],
         usuario: req.sesion?.sub,
+        usuarioNombre: texto(req.sesion?.nombre || req.sesion?.sub, 120),
       });
       recalcularEstado(venta);
       await venta.save();

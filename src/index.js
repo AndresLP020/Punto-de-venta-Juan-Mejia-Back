@@ -27,6 +27,7 @@ import cuentasProveedoresRouter from './routes/cuentasProveedores.js';
 import lienzoCharroRouter from './routes/lienzoCharro.js';
 import ticketsRouter from './routes/tickets.js';
 import carrosRouter from './routes/carros.js';
+import configTicketRouter from './routes/configTicket.js';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -88,6 +89,7 @@ app.use('/api/adelantos', requireAdmin, adelantosRouter);
 app.use('/api/devoluciones', requireAdmin, devolucionesRouter);
 app.use('/api/usuarios', requireAdmin, usuariosRouter);
 app.use('/api/lienzo-charro', requireAdmin, lienzoCharroRouter);
+app.use('/api/config-ticket', configTicketRouter);
 app.use('/api/tickets', ticketsRouter);
 
 app.use('/api', (req, res) => res.status(404).json({ error: 'Ruta no encontrada' }));

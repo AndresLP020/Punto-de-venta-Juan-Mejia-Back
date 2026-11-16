@@ -133,6 +133,34 @@ router.put('/:id', async (req, res) => {
   }
 });
 
+/**
+ * Surtir: suma lo comprado al stock actual (no lo reemplaza) y, si se envía, actualiza el precio de compra.
+ * El $inc es atómico, así que una venta hecha al mismo tiempo no se pierde.
+ */
+router.post('/:id/surtir', requirePermiso('actualizarProductos'), async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const actual = await Producto.findOne({ id }).select('esGranel').lean();
+    if (!actual) return res.status(404).json({ error: 'Producto no encontrado' });
+
+    let cantidad = numero(req.body?.cantidad, NaN);
+    if (!Number.isFinite(cantidad) || cantidad <= 0) throw new HttpError(400, 'La cantidad comprada debe ser mayor a 0');
+    if (actual.esGranel) cantidad = Math.round(cantidad * 1000) / 1000;
+    else if (!Number.isInteger(cantidad)) throw new HttpError(400, 'La cantidad debe ser un número entero de piezas');
+
+    // Suma y redondeo en una sola operación atómica (el redondeo evita residuos como 2.3000000000000003 kg).
+    const set = { stock: { $round: [{ $add: [{ $ifNull: ['$stock', 0] }, cantidad] }, 3] } };
+    const costo = req.body?.costo;
+    if (costo != null && costo !== '') set.costo = { $literal: redondear2(noNegativo(costo, 'El precio de compra')) };
+
+    const doc = await Producto.findOneAndUpdate({ id }, [{ $set: set }], { new: true }).lean();
+    if (!doc) return res.status(404).json({ error: 'Producto no encontrado' });
+    res.json(doc);
+  } catch (err) {
+    serverError(res, err);
+  }
+});
+
 router.delete('/:id', requirePermiso('borrarProductos'), async (req, res) => {
   try {
     const r = await Producto.deleteOne({ id: Number(req.params.id) });

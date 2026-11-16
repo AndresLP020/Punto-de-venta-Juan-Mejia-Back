@@ -27,6 +27,8 @@ const schema = new mongoose.Schema({
   usuario: String,
   /** Nombre visible de quien hizo la venta (se imprime en el ticket). */
   usuarioNombre: String,
+  /** Pedido del que salió la venta (cuando se cobró en caja). */
+  pedidoId: Number,
 });
 
 schema.index({ fecha: -1 });

@@ -28,6 +28,7 @@ import lienzoCharroRouter from './routes/lienzoCharro.js';
 import ticketsRouter from './routes/tickets.js';
 import carrosRouter from './routes/carros.js';
 import configTicketRouter from './routes/configTicket.js';
+import pedidosRouter from './routes/pedidos.js';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -74,6 +75,7 @@ app.use('/api', async (req, res, next) => {
 
 app.use('/api/productos', productosRouter);
 app.use('/api/ventas', ventasRouter);
+app.use('/api/pedidos', pedidosRouter);
 app.use('/api/categorias', categoriasRouter);
 app.use('/api/clientes', clientesRouter);
 app.use('/api/proveedores', proveedoresRouter);

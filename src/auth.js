@@ -22,6 +22,7 @@ export const PERMISOS_PRINCIPAL = {
   darDeBajaProductos: false,
   actualizarProductos: false,
   borrarProductos: false,
+  cobrarEnCaja: false,
 };
 
 // ---------------------------------------------------------------------------

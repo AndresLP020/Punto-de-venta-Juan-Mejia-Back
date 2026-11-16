@@ -15,6 +15,7 @@ export function normalizarPermisos(p) {
     darDeBajaProductos: p?.darDeBajaProductos === true,
     actualizarProductos: p?.actualizarProductos !== false,
     borrarProductos: p?.borrarProductos === true,
+    cobrarEnCaja: p?.cobrarEnCaja === true,
   };
 }
 

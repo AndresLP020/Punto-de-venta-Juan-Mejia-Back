@@ -263,5 +263,5 @@ router.post('/:id/cancelar', requireAdmin, async (req, res) => {
   }
 });
 
-export { aplicarStock, recalcularEstado };
+export { aplicarStock, recalcularEstado, revertirStock, validarItems };
 export default router;

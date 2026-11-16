@@ -5,6 +5,8 @@ const permisosSchema = new mongoose.Schema({
   darDeBajaProductos: { type: Boolean, default: false },
   actualizarProductos: { type: Boolean, default: true },
   borrarProductos: { type: Boolean, default: false },
+  /** Puede cobrar en caja los pedidos que se mandan desde Ventas. */
+  cobrarEnCaja: { type: Boolean, default: false },
 }, { _id: false });
 
 const schema = new mongoose.Schema({

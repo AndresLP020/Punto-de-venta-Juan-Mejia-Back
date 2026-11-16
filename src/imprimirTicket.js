@@ -17,15 +17,32 @@ const MODO_IMPRESORA = (process.env.PRINTER_MODE || 'star').toLowerCase() === 'e
 const ESC = 0x1b;
 const GS = 0x1d;
 
+/** Letra enfatizada (negrita) en todo el ticket. Se puede apagar con TICKET_NEGRITA=0. */
+const NEGRITA = process.env.TICKET_NEGRITA !== '0';
+
+/** Comandos para activar / desactivar la letra enfatizada según el modo de la impresora. */
+export function comandosNegrita(modo = MODO_IMPRESORA) {
+  if (modo === 'escpos') return { activar: Buffer.from([ESC, 0x45, 1]), desactivar: Buffer.from([ESC, 0x45, 0]) }; // ESC E n
+  return { activar: Buffer.from([ESC, 0x45]), desactivar: Buffer.from([ESC, 0x46]) }; // Star: ESC E / ESC F
+}
+
 /**
  * En Star, ESC d n corta el papel: n=1 corte parcial (recomendado en horizontal).
  * `encabezado` (opcional) son los bytes del logo que van antes del texto.
+ * Con `negrita` todo el texto sale enfatizado para que se vea más oscuro.
  */
-export function armarEscPos(texto, encabezado = null) {
+export function armarEscPos(texto, encabezado = null, { negrita = NEGRITA, modo = MODO_IMPRESORA } = {}) {
   const body = Buffer.from(String(texto ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n'), 'latin1');
   const feed = Buffer.from('\n\n\n\n', 'ascii');
   const cutStar = Buffer.from([0x1b, 0x64, 0x01]);
-  return encabezado ? Buffer.concat([encabezado, body, feed, cutStar]) : Buffer.concat([body, feed, cutStar]);
+  const partes = [];
+  if (encabezado) partes.push(encabezado);
+  if (negrita) {
+    const { activar, desactivar } = comandosNegrita(modo);
+    partes.push(activar, body, desactivar);
+  } else partes.push(body);
+  partes.push(feed, cutStar);
+  return Buffer.concat(partes);
 }
 
 // ---------------------------------------------------------------------------

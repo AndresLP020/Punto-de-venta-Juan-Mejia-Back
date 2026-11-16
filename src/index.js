@@ -26,6 +26,7 @@ import authRouter from './routes/auth.js';
 import cuentasProveedoresRouter from './routes/cuentasProveedores.js';
 import lienzoCharroRouter from './routes/lienzoCharro.js';
 import ticketsRouter from './routes/tickets.js';
+import carrosRouter from './routes/carros.js';
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -75,6 +76,7 @@ app.use('/api/ventas', ventasRouter);
 app.use('/api/categorias', categoriasRouter);
 app.use('/api/clientes', clientesRouter);
 app.use('/api/proveedores', proveedoresRouter);
+app.use('/api/carros', carrosRouter);
 app.use('/api/cuentas-proveedores', cuentasProveedoresRouter);
 
 // Apartados exclusivos del modo administrador.
